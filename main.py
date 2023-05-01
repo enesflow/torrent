@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS
 import libtorrent as lt
 import os
 import json
@@ -6,6 +7,7 @@ import random
 import shutil
 
 app = Flask(__name__)
+CORS(app, origins="*", methods=["GET", "POST"])
 
 downloads = []
 downloading = []
@@ -73,6 +75,7 @@ def beautifyStatus(status, index):
     """
     attr = dir(status)
     ret = {}
+    handle = downloads[index].handle
     for i in attr:
         if not i.startswith('_'):
             value = getattr(status, i)
@@ -89,6 +92,14 @@ def beautifyStatus(status, index):
     is_paused = not downloading[index]
     json.dumps(is_paused)
     ret["is_paused"] = is_paused
+
+    download_limit = handle.download_limit()
+    upload_limit = handle.upload_limit()
+    json.dumps(download_limit)
+    json.dumps(upload_limit)
+    ret["download_limit"] = download_limit
+    ret["upload_limit"] = upload_limit
+
     return ret
 
 
@@ -110,7 +121,6 @@ def printify(lst, spaces=4):
 def add_torrent():
     #  return "Test"
     # print info about the request
-    print(request.files)
     if 'file' not in request.files:
         return 'No file uploaded', 400
     file = request.files['file']
@@ -175,8 +185,16 @@ def stop_torrent(index):
         return 'Invalid index', 400
     downloading[index] = False
     download_obj = downloads[index]
-    download_obj.stop()
+    info = download_obj.handle.get_torrent_info()
+    filenames = []
+    for i in range(info.num_files()):
+        file = info.file_at(i)
+        filenames.append(file.path)
+    parent_dir = os.path.dirname(filenames[0])
+    shutil.rmtree(parent_dir)
+
     #  delete from list
+    download_obj.stop()
     del downloads[index]
     del downloading[index]
     return 'Torrent stopped', 200
@@ -234,7 +252,8 @@ def get_torrent_file(index, file_index):
 
     download_obj = downloads[index]
     info = download_obj.handle.get_torrent_info()
-
+    if file_index < 0 or file_index >= info.num_files():
+        return 'Invalid file index', 400
     file = info.file_at(file_index)
     return send_file(file.path, as_attachment=True, download_name=file.path.split('/')[-1])
 
@@ -246,7 +265,8 @@ def get_torrent_file_stream(index, file_index):
 
     download_obj = downloads[index]
     info = download_obj.handle.get_torrent_info()
-
+    if file_index < 0 or file_index >= info.num_files():
+        return 'Invalid file index', 400
     file = info.file_at(file_index)
     return send_file(file.path, as_attachment=False, download_name=file.path.split('/')[-1])
 
@@ -260,6 +280,34 @@ def get_all_files(index):
     name = download_obj.status.name
     shutil.make_archive(name, 'zip', name)
     return send_file(name + '.zip', as_attachment=True, download_name=name + '.zip')
+
+
+@app.route('/set_download_speed/<int:index>/<int:speed>', methods=['GET'])
+def set_download_speed(index, speed):
+    if index < 0 or index >= len(downloads):
+        return 'Invalid index', 400
+
+    download_obj = downloads[index]
+    if (speed == 0):
+        download_obj.handle.set_download_limit(-1)
+    else:
+        download_obj.handle.set_download_limit(speed * 1024)
+    #  print new limit
+    print(download_obj.handle.download_limit())
+    return 'Download speed set', 200
+
+
+@app.route('/set_upload_speed/<int:index>/<int:speed>', methods=['GET'])
+def set_upload_speed(index, speed):
+    if index < 0 or index >= len(downloads):
+        return 'Invalid index', 400
+
+    download_obj = downloads[index]
+    if (speed == 0):
+        download_obj.handle.set_upload_limit(-1)
+    else:
+        download_obj.handle.set_upload_limit(speed * 1024)
+    return 'Upload speed set', 200
 
 
 if __name__ == '__main__':
