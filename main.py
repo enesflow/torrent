@@ -1,16 +1,27 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, after_this_request
 from flask_cors import CORS
 import libtorrent as lt
 import os
 import json
 import random
 import shutil
+import threading
 
 app = Flask(__name__)
 CORS(app, origins="*", methods=["GET", "POST"])
 
 downloads = []
 downloading = []
+
+
+def remove_file_later(file_path, delay=10):
+    """
+    Removes the file at the given path after the given delay in seconds
+    """
+    def remove_file():
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    threading.Timer(delay, remove_file).start()
 
 
 class TorrentDownload:
@@ -190,8 +201,13 @@ def stop_torrent(index):
     for i in range(info.num_files()):
         file = info.file_at(i)
         filenames.append(file.path)
-    parent_dir = os.path.dirname(filenames[0])
-    shutil.rmtree(parent_dir)
+        if os.path.exists(file.path):
+            os.remove(file.path)
+    try:
+        parent_dir = os.path.dirname(filenames[0])
+        shutil.rmtree(parent_dir)
+    except:
+        pass
 
     #  delete from list
     download_obj.stop()
@@ -278,7 +294,19 @@ def get_all_files(index):
 
     download_obj = downloads[index]
     name = download_obj.status.name
-    shutil.make_archive(name, 'zip', name)
+    try:
+        shutil.make_archive(name, 'zip', name)
+    except Exception as error:
+        return "The torrent might be a single file torrent, try downloading it directly", 400
+
+    @after_this_request
+    def remove_file(response):
+        try:
+            remove_file_later(name + '.zip', 60)
+        except Exception as error:
+            pass
+        return response
+
     return send_file(name + '.zip', as_attachment=True, download_name=name + '.zip')
 
 
@@ -291,7 +319,7 @@ def set_download_speed(index, speed):
     if (speed == 0):
         download_obj.handle.set_download_limit(-1)
     else:
-        download_obj.handle.set_download_limit(speed * 1024)
+        download_obj.handle.set_download_limit(speed)
     #  print new limit
     print(download_obj.handle.download_limit())
     return 'Download speed set', 200
@@ -306,8 +334,13 @@ def set_upload_speed(index, speed):
     if (speed == 0):
         download_obj.handle.set_upload_limit(-1)
     else:
-        download_obj.handle.set_upload_limit(speed * 1024)
+        download_obj.handle.set_upload_limit(speed)
     return 'Upload speed set', 200
+
+
+@app.route('/', methods=['GET'])
+def index():
+    return "Hey this is working!"
 
 
 if __name__ == '__main__':
